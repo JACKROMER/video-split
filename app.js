@@ -167,7 +167,7 @@
     setupEl.hidden = true;
     playerEl.hidden = false;
 
-    showHud();
+    showHud(false);
     requestWakeLock();
   }
 
@@ -219,25 +219,28 @@
 
   let hudTimer = 0;
 
-  function showHud() {
+  function hideHud() {
+    clearTimeout(hudTimer);
+    hud.classList.add('is-dim');
+  }
+
+  // 首次加载时不自动隐藏：面板一旦自己消失，屏幕上就没有任何线索告诉用户点一下能叫回来
+  function showHud(autoHide = true) {
+    hud.hidden = false;
     hud.classList.remove('is-dim');
     clearTimeout(hudTimer);
-    hudTimer = setTimeout(() => hud.classList.add('is-dim'), 3000);
+    if (autoHide) hudTimer = setTimeout(hideHud, 3000);
   }
 
   function toggleHud() {
-    if (hud.classList.contains('is-dim')) {
-      showHud();
-    } else {
-      clearTimeout(hudTimer);
-      hud.classList.add('is-dim');
-    }
+    if (hud.classList.contains('is-dim')) showHud();
+    else hideHud();
   }
 
   tapzone.addEventListener('click', toggleHud);
 
   // 面板上的任何操作都重置自动隐藏计时，但拖滑杆时不要触发画面点击
-  hudPanel.addEventListener('pointerdown', showHud);
+  hudPanel.addEventListener('pointerdown', () => showHud());
   hudPanel.addEventListener('click', (e) => e.stopPropagation());
 
   // ---------------------------------------------------------------- 控件

@@ -1,6 +1,6 @@
 // 视频是手机本地文件，不走网络；这里只缓存静态外壳，让 App 断网也能打开。
 
-const CACHE = 'pingxingyan-v1';
+const CACHE = 'pingxingyan-v2';
 const SHELL = [
   './',
   './index.html',
@@ -35,19 +35,16 @@ self.addEventListener('fetch', (event) => {
   if (req.method !== 'GET') return;
   if (new URL(req.url).origin !== location.origin) return;
 
-  // stale-while-revalidate：先给缓存保证秒开，后台顺带更新
+  // 网络优先、断开时回退缓存。外壳只有几 KB，多一次往返换「改了就能立刻看到」是划算的
   event.respondWith(
-    caches.match(req).then((cached) => {
-      const fresh = fetch(req)
-        .then((res) => {
-          if (res && res.ok) {
-            const copy = res.clone();
-            caches.open(CACHE).then((cache) => cache.put(req, copy));
-          }
-          return res;
-        })
-        .catch(() => cached);
-      return cached || fresh;
-    })
+    fetch(req)
+      .then((res) => {
+        if (res && res.ok) {
+          const copy = res.clone();
+          caches.open(CACHE).then((cache) => cache.put(req, copy));
+        }
+        return res;
+      })
+      .catch(() => caches.match(req))
   );
 });

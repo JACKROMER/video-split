@@ -158,6 +158,10 @@ html, body {
 
 .hud.is-dim { opacity: 0; }
 
+/* 淡出之后必须同时放开命中，否则这层看不见的面板会一直吃掉底部的点击，
+   用户就再也点不出控制面板了 */
+.hud.is-dim .hud__panel { pointer-events: none; }
+
 .hud__panel {
   pointer-events: auto;
   background: rgba(29, 29, 31, 0.72);
