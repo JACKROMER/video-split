@@ -42,22 +42,37 @@ node tools/make-icons.js    # 重新生成 icon-180/192/512.png
 - `maxGapFor(w) = max(0, 2 * (50 - w))` —— 保证左画面最左边缘不出屏（要求 `w + gap/2 <= 50`）。画面变宽时会自动把 `gap` 往下压。
 - `DEVICES` 表按 `screen.width × screen.height + devicePixelRatio` 匹配机型，查出屏幕长边物理毫米数，用于把百分比换算成 mm 读数。匹配不到就按 DPR 猜。**mm 读数只是便利，不是机制**——真正让用户找到融合点的是手动微调，设置存在 localStorage。
 
-## 双视频同步
+## 单解码器 + canvas 镜像（不要再回到两个 video）
 
-左 `video` 是主时钟且**有声**；右 `video` **全程 muted**。这不是省事，是必须的——两份画面完全相同，双声道同时出声会相位抵消，听起来发闷。
+**只有一个 `<video>`（`#v`），在左画面里，有声。右画面是一块 `<canvas id="cR">`。**
+`pump()` 这个 rAF 循环每帧把左画面正在显示的那一帧 `drawImage` 到右画面。
 
-`loadFile()` 对同一个 `File` **调两次 `createObjectURL`**，两个 video 各拿一个独立 URL。这是刻意的：共用同一个 blob URL 时，iOS 上两个元素会争抢加载状态。
+**这不是为了省事，是为了消除一整类 bug。** 两份画面显示的是同一个解码时钟的同一帧图像，
+**结构上不可能漂移**，所以整个 App 里没有任何对时 / 纠偏代码。
 
-同步分两层，都在 `app.js`：
+历史教训——不要重走：
 
-- 事件层：左 video 的 `play` / `pause` / `seeked` 驱动右 video
-- 漂移层：`tick()` 的 rAF 循环里调 `syncRight()`，阈值 `DRIFT_LIMIT = 0.05`（50ms），两次校正至少间隔 250ms
+1. 最早是两个 `<video>` 各自解码，靠事件 + 定期 seek 纠偏。seek 会清空解码缓冲，
+   每次「修正」都让右路卡一下，反而更像「右边在延迟」。
+2. 改成用 `playbackRate` 在 0.95/1/1.05 三挡微调追帧后，用户报告**两边的播放速度对不上**——
+   iOS 不保证兑现 `playbackRate` 写入，纠偏本身变成了新的偏差来源。
+3. 结论：两个独立解码器必然会漂，而纠偏手段（seek / 变速）各自都有 iOS 上的坑。
+   与其修不完地补纠偏逻辑，不如让「漂移」这件事在架构上无法发生。
 
-**起播必须并行**：`vL.play()` 和 `vR.play()` 各调各的，绝不能串成 `vL.play().then(() => vR.play())`。串起来右路会天然晚几十到几百毫秒，而且这个固定偏差会一直挂在那里，表现就是「右边的画面慢半拍」。
+**`pump()` 必须用 rAF，不能用 `requestVideoFrameCallback`。** rVFC 在片源就绪前注册就
+永远不回调，整套画面会静静地停止更新；rAF 无论有没有片源都一定会触发。
+暂停时用 `drawnAt === v.currentTime` 去重，避免静止画面也一直占着 GPU。
 
-**纠偏靠倍速，不靠 seek**：`syncRight()` 只在偏差超过 `SEEK_LIMIT = 0.3` 时才 `vR.currentTime = ...` 硬对齐；50–300ms 之间用 `vR.playbackRate` 在 0.95 / 1 / 1.05 三挡之间微调追帧。原因是 seek 会清空解码缓冲，在 iOS 上就是一次可见的卡顿——早期版本每 500ms 无条件 seek 纠偏，结果每次纠偏都让右路卡一下，反而更像「右边在延迟」。右路全程静音，所以变速没有听感代价。
+**`drawRight()` 的 letterbox 几何必须和左边 video 的 `object-fit: contain` 完全一致**，
+否则两份画面在融合时对不上。左边由浏览器算，右边由 `sizeCanvas()` / `drawRight()`
+按 `Math.min(w/vw, h/vh)` 手算，两边都是居中 contain。
 
-硬对齐之后要设 `syncHold = now + 400`，给右路重新缓冲的时间，否则会在同一个位置连着 seek。`setRightRate()` 内部做了去重，避免每帧都写 `playbackRate`。
+`sizeCanvas()` 在三个时机调用：`loadFile()` 解除隐藏之后、`applySettings()` 里
+（`--w` 变化会改 pane 宽度）、以及 resize / orientationchange。
+改画布尺寸会清空内容，所以内部要 `drawnAt = -1` 再补画一次。
+
+`loadFile()` 只调一次 `createObjectURL`——现在只有一个 video 元素，不再需要两个 URL 绕开
+iOS 的加载状态争抢。
 
 ## iOS / PWA 容易踩的坑
 

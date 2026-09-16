@@ -7,8 +7,8 @@
   const playerEl = $('player');
   const fileIn = $('file');
   const pickBtn = $('pick');
-  const vL = $('vL');
-  const vR = $('vR');
+  const v = $('v');
+  const cR = $('cR');
   const tapzone = $('tapzone');
   const hud = $('hud');
   const hudPanel = hud.querySelector('.hud__panel');
@@ -101,6 +101,7 @@
     gOut.textContent = state.gap + '%';
 
     updateReadout();
+    sizeCanvas(); // 画面宽度变了，右画面的画布尺寸要跟着走，否则会被拉伸
   }
 
   function updateReadout() {
@@ -121,13 +122,11 @@
 
   // ---------------------------------------------------------------- 加载视频
 
-  let urlL = null;
-  let urlR = null;
+  let url = null;
 
-  function releaseUrls() {
-    if (urlL) URL.revokeObjectURL(urlL);
-    if (urlR) URL.revokeObjectURL(urlR);
-    urlL = urlR = null;
+  function releaseUrl() {
+    if (url) URL.revokeObjectURL(url);
+    url = null;
   }
 
   const fmtTime = (s) => {
@@ -137,32 +136,69 @@
     return m + ':' + String(r).padStart(2, '0');
   };
 
+  const ctxR = cR.getContext('2d');
+  let drawnAt = -1;
+
+  function sizeCanvas() {
+    const r = cR.parentElement.getBoundingClientRect();
+    if (r.width < 1 || r.height < 1) return;
+
+    // 上限 2 倍：右画面只占屏宽四成、又是缩小绘制，3 倍纯属浪费填充率
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const w = Math.max(1, Math.round(r.width * dpr));
+    const h = Math.max(1, Math.round(r.height * dpr));
+    if (cR.width === w && cR.height === h) return;
+
+    cR.width = w;
+    cR.height = h;
+    drawnAt = -1; // 改尺寸会清空画布，作废「已画过」的记录，否则暂停时会留下一块空白
+    drawRight();
+  }
+
+  // 按 object-fit: contain 的规则把当前帧等比放进右画面——
+  // 必须是 contain，才能和左边 video 自己的 letterbox 几何完全重合
+  function drawRight() {
+    const vw = v.videoWidth;
+    const vh = v.videoHeight;
+    if (!vw || !vh || cR.width < 2) return;
+
+    // 暂停且这一帧已经画过就不再重复画，省得暂停时也一直占着 GPU
+    if (v.paused && drawnAt === v.currentTime) return;
+
+    const s = Math.min(cR.width / vw, cR.height / vh);
+    const dw = vw * s;
+    const dh = vh * s;
+    ctxR.drawImage(v, (cR.width - dw) / 2, (cR.height - dh) / 2, dw, dh);
+    drawnAt = v.currentTime;
+  }
+
+  // 每帧把左画面正在显示的那一帧抄到右画面。左右共用同一个解码时钟、同一帧图像，
+  // 结构上不可能漂移，所以整个 App 里没有任何对时 / 纠偏逻辑。
+  //
+  // 用 rAF 而不是 requestVideoFrameCallback：rAF 无论有没有片源都一定会触发，
+  // 而 rVFC 在片源就绪前注册就永远不会回调，整套画面会静静地不再更新。
+  function pump() {
+    drawRight();
+    requestAnimationFrame(pump);
+  }
+  requestAnimationFrame(pump);
+
   function loadFile(file) {
-    releaseUrls();
+    releaseUrl();
+    url = URL.createObjectURL(file);
 
-    // 两个 video 各自拿一个 blob URL：共用同一个 URL 时 iOS 上两个元素会争抢加载状态
-    urlL = URL.createObjectURL(file);
-    urlR = URL.createObjectURL(file);
+    v.addEventListener('loadedmetadata', sizeCanvas, { once: true });
+    v.addEventListener(
+      'canplay',
+      () => {
+        v.currentTime = 0;
+        v.play().catch(() => {});
+      },
+      { once: true }
+    );
 
-    let pending = 2;
-    const bothReady = () => {
-      pending -= 1;
-      if (pending > 0) return;
-      vL.currentTime = 0;
-      vR.currentTime = 0;
-      // 两路必须同时起播。串成 vL.play().then(() => vR.play()) 会让右路天然晚几十到几百毫秒，
-      // 这个偏差会一直挂着，看起来就是「右边的画面慢半拍」
-      vL.play().catch(() => {});
-      vR.play().catch(() => {});
-    };
-
-    vL.addEventListener('canplay', bothReady, { once: true });
-    vR.addEventListener('canplay', bothReady, { once: true });
-
-    vL.src = urlL;
-    vR.src = urlR;
-    vL.load();
-    vR.load();
+    v.src = url;
+    v.load();
 
     seek.value = '0';
     timeEl.textContent = '0:00';
@@ -170,76 +206,30 @@
     setupEl.hidden = true;
     playerEl.hidden = false;
 
+    sizeCanvas();
     showHud(false);
     requestWakeLock();
   }
 
-  // ---------------------------------------------------------------- 同步
+  // ---------------------------------------------------------------- 播放状态
 
-  vL.addEventListener('play', () => {
+  v.addEventListener('play', () => {
     playerEl.classList.add('is-playing');
-    vR.play().catch(() => {});
     showHud();
   });
 
-  vL.addEventListener('pause', () => {
+  v.addEventListener('pause', () => {
     playerEl.classList.remove('is-playing');
-    vR.pause();
     showHud();
   });
 
-  vL.addEventListener('seeked', () => {
-    vR.currentTime = vL.currentTime;
-    setRightRate(1);
-    lastSyncAt = performance.now();
-    syncHold = performance.now() + 400;
-  });
-
-  let lastSyncAt = 0;
   let dragging = false;
 
-  const DRIFT_LIMIT = 0.05; // 同一份画面，融合观看时 50ms 以上的错位就开始看得出来
-  const SEEK_LIMIT = 0.3;   // 差到这个程度微调追不回来，只能硬对齐
-  const NUDGE = 0.05;       // 微调幅度；右路全程静音，变速没有听感代价
-
-  let vRRate = 1;
-
-  function setRightRate(rate) {
-    if (vRRate === rate) return;
-    vRRate = rate;
-    vR.playbackRate = rate;
-  }
-
-  let syncHold = 0;
-
-  // 用倍速追帧，而不是每次都 seek：seek 会清空解码缓冲，在 iOS 上就是一次可见的卡顿。
-  // 原先是靠频繁 seek 纠偏，结果每次纠偏都让右路卡一下，反而更像「右边在延迟」
-  function syncRight() {
-    const drift = vL.currentTime - vR.currentTime; // 正数 = 右路落后
-
-    if (Math.abs(drift) > SEEK_LIMIT) {
-      vR.currentTime = vL.currentTime;
-      setRightRate(1);
-      syncHold = performance.now() + 400; // 给右路一点重新缓冲的时间，否则会连着 seek
-      return;
-    }
-
-    if (drift > DRIFT_LIMIT) setRightRate(1 + NUDGE);       // 落后就加速追
-    else if (drift < -DRIFT_LIMIT) setRightRate(1 - NUDGE); // 超前就减速等
-    else setRightRate(1);
-  }
-
+  // 只负责进度条和时间的刷新；画面同步由 frame() 负责
   function tick() {
-    if (!playerEl.hidden) {
-      if (!dragging && vL.duration && isFinite(vL.duration)) {
-        seek.value = String(Math.round((vL.currentTime / vL.duration) * 1000));
-        timeEl.textContent = fmtTime(vL.currentTime) + ' / ' + fmtTime(vL.duration);
-      }
-
-      if (!vL.paused && performance.now() > syncHold && performance.now() - lastSyncAt > 250) {
-        syncRight();
-        lastSyncAt = performance.now();
-      }
+    if (!playerEl.hidden && !dragging && v.duration && isFinite(v.duration)) {
+      seek.value = String(Math.round((v.currentTime / v.duration) * 1000));
+      timeEl.textContent = fmtTime(v.currentTime) + ' / ' + fmtTime(v.duration);
     }
     requestAnimationFrame(tick);
   }
@@ -276,27 +266,21 @@
   // ---------------------------------------------------------------- 控件
 
   playpauseBtn.addEventListener('click', () => {
-    if (vL.paused) {
-      vL.play().catch(() => {});
-    } else {
-      vL.pause();
-    }
+    if (v.paused) v.play().catch(() => {});
+    else v.pause();
     showHud();
   });
 
   seek.addEventListener('input', () => {
     dragging = true;
     showHud();
-    const d = vL.duration;
+    const d = v.duration;
     if (!d || !isFinite(d)) return;
-    const t = (Number(seek.value) / 1000) * d;
-    vL.currentTime = t;
-    vR.currentTime = t;
+    v.currentTime = (Number(seek.value) / 1000) * d;
   });
 
   const endDrag = () => {
     dragging = false;
-    lastSyncAt = performance.now();
   };
   seek.addEventListener('change', endDrag);
   seek.addEventListener('pointerup', endDrag);
@@ -322,10 +306,8 @@
   });
 
   restartBtn.addEventListener('click', () => {
-    vL.currentTime = 0;
-    vR.currentTime = 0;
-    vL.play().catch(() => {});
-    vR.play().catch(() => {});
+    v.currentTime = 0;
+    v.play().catch(() => {});
     showHud();
   });
 
@@ -371,8 +353,12 @@
 
   // ---------------------------------------------------------------- 启动
 
-  window.addEventListener('resize', updateReadout);
-  window.addEventListener('orientationchange', () => setTimeout(updateReadout, 300));
+  const onViewportChange = () => {
+    updateReadout();
+    sizeCanvas();
+  };
+  window.addEventListener('resize', onViewportChange);
+  window.addEventListener('orientationchange', () => setTimeout(onViewportChange, 300));
 
   loadSettings();
   state.gap = Math.min(state.gap, Math.min(GAP_SLIDER_MAX, maxGapFor(state.w)));
