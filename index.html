@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>平行眼</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="description" content="把同一画面左右各放一份，用平行眼融合观看。">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="平行眼">
+<meta name="theme-color" content="#000000">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" href="icon-192.png">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<section class="screen screen--setup" id="setup">
+  <div class="setup">
+    <h1 class="setup__title">平行眼</h1>
+    <p class="setup__lead">同一画面左右各放一份，把手机横过来，放松眼睛让视线发散，两份会合成一幅。</p>
+    <button class="btn" id="pick" type="button">选择视频</button>
+    <p class="setup__note">画面宽度最多只能占到屏幕四成——这是瞳距决定的，绕不过去。</p>
+  </div>
+  <input type="file" id="file" accept="video/*" hidden>
+</section>
+
+<section class="screen screen--player" id="player" hidden>
+  <div class="stage">
+    <div class="pane pane--left">
+      <video id="vL" playsinline webkit-playsinline preload="auto"></video>
+    </div>
+    <div class="pane pane--right">
+      <video id="vR" playsinline webkit-playsinline preload="auto" muted></video>
+    </div>
+  </div>
+
+  <div class="tapzone" id="tapzone"></div>
+
+  <div class="hud" id="hud" hidden>
+    <div class="hud__panel">
+      <div class="hud__row">
+        <button class="icon" id="playpause" type="button" aria-label="播放">
+          <svg class="icon__play" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5v11l9-5.5z"/></svg>
+          <svg class="icon__pause" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5h3v11H4zM9 2.5h3v11H9z"/></svg>
+        </button>
+        <input class="seek" id="seek" type="range" min="0" max="1000" value="0" step="1" aria-label="播放进度">
+        <span class="hud__time" id="time">0:00</span>
+      </div>
+
+      <div class="hud__row hud__row--sliders">
+        <div class="hud__field">
+          <label class="hud__label" for="w">画面宽度</label>
+          <input class="slider" id="w" type="range" min="15" max="50" value="40" step="0.5">
+          <output class="hud__out" id="wOut">40%</output>
+        </div>
+        <div class="hud__field">
+          <label class="hud__label" for="g">中间黑边</label>
+          <input class="slider" id="g" type="range" min="0" max="20" value="3" step="0.5">
+          <output class="hud__out" id="gOut">3%</output>
+        </div>
+      </div>
+
+      <div class="hud__row hud__row--foot">
+        <p class="hud__readout" id="readout"></p>
+        <button class="ghost" id="restart" type="button">重播</button>
+        <button class="ghost" id="change" type="button">换视频</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="rotate" id="rotate">
+    <p class="rotate__title">请横屏使用</p>
+    <p class="rotate__sub">竖屏时左右两份的间距远小于瞳距，物理上无法融合。</p>
+  </div>
+</section>
+
+<script src="app.js"></script>
+</body>
+</html>
