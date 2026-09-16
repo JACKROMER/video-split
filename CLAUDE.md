@@ -51,9 +51,13 @@ node tools/make-icons.js    # 重新生成 icon-180/192/512.png
 同步分两层，都在 `app.js`：
 
 - 事件层：左 video 的 `play` / `pause` / `seeked` 驱动右 video
-- 漂移层：`tick()` 的 rAF 循环里校正，阈值 `DRIFT_LIMIT = 0.08`（80ms），且两次校正至少间隔 500ms
+- 漂移层：`tick()` 的 rAF 循环里调 `syncRight()`，阈值 `DRIFT_LIMIT = 0.05`（50ms），两次校正至少间隔 250ms
 
-80ms 可以放这么宽，是因为两边显示的是**完全相同**的画面，融合时人眼分辨不出这个量级的左右差异；阈值收紧只会徒增 seek 造成的卡顿。
+**起播必须并行**：`vL.play()` 和 `vR.play()` 各调各的，绝不能串成 `vL.play().then(() => vR.play())`。串起来右路会天然晚几十到几百毫秒，而且这个固定偏差会一直挂在那里，表现就是「右边的画面慢半拍」。
+
+**纠偏靠倍速，不靠 seek**：`syncRight()` 只在偏差超过 `SEEK_LIMIT = 0.3` 时才 `vR.currentTime = ...` 硬对齐；50–300ms 之间用 `vR.playbackRate` 在 0.95 / 1 / 1.05 三挡之间微调追帧。原因是 seek 会清空解码缓冲，在 iOS 上就是一次可见的卡顿——早期版本每 500ms 无条件 seek 纠偏，结果每次纠偏都让右路卡一下，反而更像「右边在延迟」。右路全程静音，所以变速没有听感代价。
+
+硬对齐之后要设 `syncHold = now + 400`，给右路重新缓冲的时间，否则会在同一个位置连着 seek。`setRightRate()` 内部做了去重，避免每帧都写 `playbackRate`。
 
 ## iOS / PWA 容易踩的坑
 

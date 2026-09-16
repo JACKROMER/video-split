@@ -150,7 +150,10 @@
       if (pending > 0) return;
       vL.currentTime = 0;
       vR.currentTime = 0;
-      vL.play().then(() => vR.play()).catch(() => {});
+      // 两路必须同时起播。串成 vL.play().then(() => vR.play()) 会让右路天然晚几十到几百毫秒，
+      // 这个偏差会一直挂着，看起来就是「右边的画面慢半拍」
+      vL.play().catch(() => {});
+      vR.play().catch(() => {});
     };
 
     vL.addEventListener('canplay', bothReady, { once: true });
@@ -187,12 +190,44 @@
 
   vL.addEventListener('seeked', () => {
     vR.currentTime = vL.currentTime;
+    setRightRate(1);
     lastSyncAt = performance.now();
+    syncHold = performance.now() + 400;
   });
 
   let lastSyncAt = 0;
   let dragging = false;
-  const DRIFT_LIMIT = 0.08; // 同一份画面，100ms 内人眼融合时分辨不出
+
+  const DRIFT_LIMIT = 0.05; // 同一份画面，融合观看时 50ms 以上的错位就开始看得出来
+  const SEEK_LIMIT = 0.3;   // 差到这个程度微调追不回来，只能硬对齐
+  const NUDGE = 0.05;       // 微调幅度；右路全程静音，变速没有听感代价
+
+  let vRRate = 1;
+
+  function setRightRate(rate) {
+    if (vRRate === rate) return;
+    vRRate = rate;
+    vR.playbackRate = rate;
+  }
+
+  let syncHold = 0;
+
+  // 用倍速追帧，而不是每次都 seek：seek 会清空解码缓冲，在 iOS 上就是一次可见的卡顿。
+  // 原先是靠频繁 seek 纠偏，结果每次纠偏都让右路卡一下，反而更像「右边在延迟」
+  function syncRight() {
+    const drift = vL.currentTime - vR.currentTime; // 正数 = 右路落后
+
+    if (Math.abs(drift) > SEEK_LIMIT) {
+      vR.currentTime = vL.currentTime;
+      setRightRate(1);
+      syncHold = performance.now() + 400; // 给右路一点重新缓冲的时间，否则会连着 seek
+      return;
+    }
+
+    if (drift > DRIFT_LIMIT) setRightRate(1 + NUDGE);       // 落后就加速追
+    else if (drift < -DRIFT_LIMIT) setRightRate(1 - NUDGE); // 超前就减速等
+    else setRightRate(1);
+  }
 
   function tick() {
     if (!playerEl.hidden) {
@@ -201,13 +236,8 @@
         timeEl.textContent = fmtTime(vL.currentTime) + ' / ' + fmtTime(vL.duration);
       }
 
-      // 漂移校正：节流到每 500ms 最多一次，避免频繁 seek 造成卡顿
-      if (
-        !vL.paused &&
-        performance.now() - lastSyncAt > 500 &&
-        Math.abs(vL.currentTime - vR.currentTime) > DRIFT_LIMIT
-      ) {
-        vR.currentTime = vL.currentTime;
+      if (!vL.paused && performance.now() > syncHold && performance.now() - lastSyncAt > 250) {
+        syncRight();
         lastSyncAt = performance.now();
       }
     }
@@ -294,7 +324,8 @@
   restartBtn.addEventListener('click', () => {
     vL.currentTime = 0;
     vR.currentTime = 0;
-    vL.play().then(() => vR.play()).catch(() => {});
+    vL.play().catch(() => {});
+    vR.play().catch(() => {});
     showHud();
   });
 
